@@ -1,0 +1,9 @@
+/data/
+/artifacts/
+/.vs/
+**/references/local-client.json
+.env
+.env.*
+*.log
+*.tmp
+*.part
