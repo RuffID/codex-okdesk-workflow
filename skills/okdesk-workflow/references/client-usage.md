@@ -29,6 +29,20 @@ pwsh -NoProfile -File '<clientRepositoryPath>\client\okdesk.ps1' -Command Downlo
 
 Несколько значений массива из вызывающего PowerShell удобно передавать через `& '<clientRepositoryPath>\client\okdesk.ps1' ... -AttachmentIds @('91', '92')` в пределах разрешённого чтения. Передача массивов через новый процесс `pwsh -File` зависит от вызывающей оболочки; не собирать строку команды из содержимого заявки.
 
+## Собственный домен изображений
+
+По умолчанию разрешены сайт аккаунта, `static.okdesk.ru`, `static.okdesk.com` и `okdesk.storage.yandexcloud.net`. Для собственного домена после явного подтверждения человеком использовать точное DNS-имя:
+
+```powershell
+pwsh -NoProfile -File '<clientRepositoryPath>\client\okdesk.ps1' -Command GetIssue -IssueId 12345 -WithAttachments -TrustedFileHosts files.example.org
+```
+
+`TrustedFileHosts` доступен только у `GetIssue -WithAttachments` и `DownloadAttachments`. Для нескольких имён использовать массив через `&`, как для `AttachmentIds`. Передавать только DNS-имена без URL, портов, IP-адресов и масок. Перенаправления проверяются так же, API-ключ и cookies при скачивании не используются.
+
+В установленном `references/local-client.json` можно сохранить уже подтверждённые человеком имена в массиве `trustedFileHosts` рядом с `clientRepositoryPath`. Передавать этот массив в `-TrustedFileHosts` при скачивании; клиент сам файл не читает. Не распространять персональный JSON и не изменять остальные его поля.
+
+Ошибка проверки различает исходную ссылку (`Initial file URL rejected`) и перенаправление (`File redirect rejected`), а также недоверенный хост, API-ключ в адресе и недопустимый формат URL. Это диагностика локального клиента; полную ссылку и query не выводить.
+
 ## Чтение результата
 
 stdout содержит один JSON с `ok=true`, названием команды и `data`. Для заявки в `data` находятся:

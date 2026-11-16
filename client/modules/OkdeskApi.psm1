@@ -2,6 +2,7 @@
 Set-StrictMode -Version Latest
 
 function New-OkdeskContext {
+    param([string[]]$TrustedFileHosts = @())
     $siteText = [Environment]::GetEnvironmentVariable('OKDESK_SITE_URL')
     $token = [Environment]::GetEnvironmentVariable('OKDESK_API_TOKEN')
     if (-not $siteText -or -not $token) { throw 'Set OKDESK_SITE_URL and OKDESK_API_TOKEN locally before connecting.' }
@@ -12,6 +13,14 @@ function New-OkdeskContext {
         throw 'OKDESK_SITE_URL must be https://<account>.okdesk.ru without a path, query or credentials.'
     }
     if ($token -match '\s') { throw 'OKDESK_API_TOKEN contains whitespace.' }
+    $fileHosts = @($site.Host, 'static.okdesk.ru', 'static.okdesk.com', 'okdesk.storage.yandexcloud.net')
+    foreach ($fileHost in $TrustedFileHosts) {
+        if (-not $fileHost -or $fileHost.Length -gt 253 -or $fileHost -notmatch '^[a-z0-9.-]+$' -or
+            [uri]::CheckHostName($fileHost) -ne [UriHostNameType]::Dns) {
+            throw 'TrustedFileHosts must contain exact DNS hostnames without URLs, ports or wildcards.'
+        }
+        $fileHosts += $fileHost.ToLowerInvariant()
+    }
     $apiHandler = [Net.Http.HttpClientHandler]::new()
     $apiHandler.AllowAutoRedirect = $false
     $apiHandler.UseCookies = $false
@@ -25,6 +34,7 @@ function New-OkdeskContext {
     $siteUrl = $site.GetLeftPart([UriPartial]::Authority)
     return @{
         apiClient = $apiClient; fileClient = $fileClient; siteUrl = $siteUrl; token = $token
+        fileHosts = @($fileHosts | Select-Object -Unique)
         namespace = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
             [Text.Encoding]::UTF8.GetBytes($siteUrl + '|' + $token))).ToLowerInvariant()
     }
@@ -105,13 +115,21 @@ function Get-OkdeskFileUri {
     param([Collections.IDictionary]$Context, [string]$Url)
     $target = $null
     if (-not [uri]::TryCreate([uri]($Context.siteUrl + '/'), $Url, [ref]$target)) { throw 'Invalid file URL.' }
-    $siteHost = ([uri]$Context.siteUrl).Host
-    if ($target.Scheme -ne 'https' -or $target.Port -ne 443 -or $target.UserInfo -or $target.Fragment -or
-        $target.Host -notin @($siteHost, 'static.okdesk.ru') -or
-        $target.Query -match '(?i)(^|[?&])api_token=' -or
+    $decodedUrl = [uri]::UnescapeDataString($target.AbsoluteUri)
+    if ([uri]::UnescapeDataString($target.Query) -match '(?i)(^|[?&])api_token=' -or
         $target.AbsoluteUri.Contains([string]$Context.token) -or
-        $target.AbsoluteUri.Contains([uri]::EscapeDataString([string]$Context.token))) {
-        throw 'File URL is outside the trusted Okdesk hosts or contains an API token.'
+        $target.AbsoluteUri.Contains([uri]::EscapeDataString([string]$Context.token)) -or
+        $decodedUrl.Contains([string]$Context.token)) {
+        throw 'File URL contains an API token; downloading it is forbidden.'
+    }
+    if ($target.Scheme -ne 'https' -or $target.Port -ne 443) {
+        throw 'File URL must use HTTPS on port 443.'
+    }
+    if ($target.UserInfo -or $target.Fragment) {
+        throw 'File URL must not contain credentials or a fragment.'
+    }
+    if ($target.Host -notin $Context.fileHosts) {
+        throw "File URL host '$($target.Host)' is not trusted. Confirm the host before adding it to TrustedFileHosts."
     }
     return $target
 }
@@ -122,7 +140,8 @@ function Save-OkdeskRemoteFile {
         [long]$ExpectedSize = -1, [switch]$ApprovedLarge, [switch]$ImageOnly
     )
     $limit = 500000000L
-    $target = Get-OkdeskFileUri $Context $Url
+    try { $target = Get-OkdeskFileUri $Context $Url }
+    catch { throw ('Initial file URL rejected: ' + $_.Exception.Message) }
     $response = $null
     $cts = [Threading.CancellationTokenSource]::new([timespan]::FromMinutes(10))
     $partPath = $Path + '.part'
@@ -140,7 +159,8 @@ function Save-OkdeskRemoteFile {
             $response = $null
             if ($null -eq $location -or $redirect -eq 3) { throw 'File redirect is missing or exceeds the redirect limit.' }
             $next = [uri]::new($target, $location)
-            $target = Get-OkdeskFileUri $Context $next.AbsoluteUri
+            try { $target = Get-OkdeskFileUri $Context $next.AbsoluteUri }
+            catch { throw ('File redirect rejected: ' + $_.Exception.Message) }
         }
         if (-not $response.IsSuccessStatusCode) { throw "File download returned HTTP $([int]$response.StatusCode)." }
         $contentType = if ($null -ne $response.Content.Headers.ContentType) { $response.Content.Headers.ContentType.MediaType } else { '' }

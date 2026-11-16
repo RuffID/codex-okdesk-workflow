@@ -6,6 +6,7 @@ param(
     [ValidateRange(1, [long]::MaxValue)][long]$EquipmentId,
     [string[]]$AttachmentIds = @(),
     [string[]]$ApprovedLargeAttachmentIds = @(),
+    [string[]]$TrustedFileHosts = @(),
     [switch]$WithAttachments
 )
 
@@ -16,8 +17,8 @@ $state = $null
 
 try {
     $allowedParameters = switch ($Command) {
-        'GetIssue' { @('Command', 'IssueId', 'WithAttachments', 'AttachmentIds', 'ApprovedLargeAttachmentIds') }
-        'DownloadAttachments' { @('Command', 'IssueId', 'AttachmentIds', 'ApprovedLargeAttachmentIds') }
+        'GetIssue' { @('Command', 'IssueId', 'WithAttachments', 'AttachmentIds', 'ApprovedLargeAttachmentIds', 'TrustedFileHosts') }
+        'DownloadAttachments' { @('Command', 'IssueId', 'AttachmentIds', 'ApprovedLargeAttachmentIds', 'TrustedFileHosts') }
         'GetEquipment' { @('Command', 'EquipmentId') }
         'GetEquipmentParameters' { @('Command') }
     }
@@ -29,6 +30,9 @@ try {
     if ($Command -eq 'GetIssue' -and -not $WithAttachments -and ($AttachmentIds.Count -gt 0 -or $ApprovedLargeAttachmentIds.Count -gt 0)) {
         throw 'Attachment selection and approval require WithAttachments.'
     }
+    if ($Command -eq 'GetIssue' -and -not $WithAttachments -and $TrustedFileHosts.Count -gt 0) {
+        throw 'TrustedFileHosts requires WithAttachments.'
+    }
     foreach ($id in @($AttachmentIds) + @($ApprovedLargeAttachmentIds)) {
         $parsed = 0L
         if ($id -cnotmatch '^[1-9][0-9]*$' -or -not [long]::TryParse($id, [ref]$parsed)) { throw 'Attachment IDs must be positive numbers.' }
@@ -36,7 +40,7 @@ try {
     Import-Module (Join-Path $PSScriptRoot 'modules/OkdeskApi.psm1') -Force -DisableNameChecking
     Import-Module (Join-Path $PSScriptRoot 'modules/OkdeskStorage.psm1') -Force -DisableNameChecking
     Import-Module (Join-Path $PSScriptRoot 'modules/OkdeskRead.psm1') -Force -DisableNameChecking
-    $context = New-OkdeskContext
+    $context = New-OkdeskContext -TrustedFileHosts $TrustedFileHosts
     $state = New-OkdeskState (Split-Path $PSScriptRoot -Parent) $context
     $result = switch ($Command) {
         'GetIssue' { Get-OkdeskIssueBundle $context $state $IssueId -WithAttachments:$WithAttachments -AttachmentIds $AttachmentIds -ApprovedLargeAttachmentIds $ApprovedLargeAttachmentIds }
